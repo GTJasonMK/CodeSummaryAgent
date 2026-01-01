@@ -1,0 +1,114 @@
+# CodeSummaryAgent 配置文件
+
+# LLM服务配置
+llm:
+  # LLM提供商: openai / anthropic / ollama / azure
+  provider: "anthropic"
+
+  # 模型名称
+  # OpenAI: gpt-4, gpt-4-turbo, gpt-3.5-turbo
+  # Anthropic: claude-3-opus-20240229, claude-3-sonnet-20240229
+  # Ollama: llama2, codellama, deepseek-coder
+  model: "claude-haiku-4-5-20251001"
+
+  # API密钥 (支持环境变量格式: ${OPENAI_API_KEY})
+  api_key: "sk-m8BvTxwZuQuqwsKSPaPPI7KqIa9O8xo2xeGw8dwNRg4LJ4ue"
+
+  # 自定义API地址 (可选，用于代理或私有部署/中转站)
+  base_url: 'https://anyrouter.top'
+
+  # 最大并发数
+  max_concurrent: 5
+
+  # 单次调用超时(秒)
+  timeout: 120
+
+  # 最大重试次数
+  max_retries: 3
+
+  # 初始重试延迟(秒)
+  retry_delay: 1.0
+
+  # API格式 (可选): openai / anthropic
+  # 为空则根据模型名自动检测（模型名含claude则用anthropic格式）
+  # 如果中转站需要特定格式，可在此强制指定
+  # api_format: "openai"
+
+  # 是否模拟浏览器请求头 (用于绕过中转站的Cloudflare检测)
+  simulate_browser: true
+
+  # 生成温度参数 (可选，0.0-2.0)
+  # temperature: 0.7
+
+  # 最大生成token数 (可选)
+  # max_tokens: 4096
+
+# 分析配置
+analysis:
+  # 忽略的文件/目录模式 (glob格式)
+  ignore_patterns:
+    - "node_modules/**"
+    - "__pycache__/**"
+    - ".git/**"
+    - ".venv/**"
+    - "venv/**"
+    - "*.pyc"
+    - "*.pyo"
+    - "*.log"
+    - "*.tmp"
+    - ".DS_Store"
+    - "Thumbs.db"
+    - "*.egg-info/**"
+    - "dist/**"
+    - "build/**"
+    - ".idea/**"
+    - ".vscode/**"
+
+  # 支持的文件扩展名
+  include_extensions:
+    - ".py"
+    - ".js"
+    - ".ts"
+    - ".jsx"
+    - ".tsx"
+    - ".java"
+    - ".go"
+    - ".rs"
+    - ".cpp"
+    - ".c"
+    - ".h"
+    - ".cs"
+    - ".rb"
+    - ".php"
+    - ".swift"
+    - ".kt"
+    - ".scala"
+    - ".vue"
+    - ".svelte"
+
+  # 最大文件大小(字节)，超过此大小的文件将被跳过
+  max_file_size: 102400  # 100KB
+
+# 输出配置
+output:
+  # 文档目录后缀 (如源目录为 /code/myproject，则文档目录为 myproject_docs)
+  docs_suffix: "_docs"
+
+  # 文档目录是否在源代码目录内部
+  # true: c:/a/b -> c:/a/b/b_docs (在源代码内部)
+  # false: c:/a/b -> c:/a/b_docs (与源代码平级)
+  docs_inside_source: true
+
+  # 最终生成的README文档名
+  readme_name: "README.md"
+
+  # 阅读顺序指南文档名
+  reading_guide_name: "READING_GUIDE.md"
+
+  # 目录汇总文档名 (放在每个目录下)
+  dir_summary_name: "_dir_summary.md"
+
+# Web服务配置
+server:
+  host: "127.0.0.1"
+  port: 8000
