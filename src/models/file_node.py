@@ -45,6 +45,10 @@ class FileNode:
     doc_path: Optional[str] = None                   # 生成的文档路径
     error_message: Optional[str] = None              # 错误信息
 
+    # API接口信息（用于两阶段API文档生成）
+    has_api: bool = False                            # 是否包含API接口
+    api_info: Optional[str] = None                   # 提取的API接口信息摘要
+
     @property
     def is_file(self) -> bool:
         """是否为文件"""
@@ -95,6 +99,16 @@ class FileNode:
                 dirs.extend(child.get_all_dirs())
         return dirs
 
+    def get_api_files(self) -> List["FileNode"]:
+        """递归获取所有包含API接口的文件节点"""
+        api_files = []
+        if self.is_file and self.has_api:
+            api_files.append(self)
+        else:
+            for child in self.children:
+                api_files.extend(child.get_api_files())
+        return api_files
+
     def get_children_by_type(self, node_type: NodeType) -> List["FileNode"]:
         """获取指定类型的子节点"""
         return [child for child in self.children if child.node_type == node_type]
@@ -115,6 +129,8 @@ class FileNode:
             "status": self.status.value,
             "doc_path": self.doc_path,
             "error_message": self.error_message,
+            "has_api": self.has_api,
+            "api_info": self.api_info,
             "children": [child.to_dict() for child in self.children],
         }
 
@@ -131,6 +147,8 @@ class FileNode:
             status=AnalysisStatus(data.get("status", "pending")),
             doc_path=data.get("doc_path"),
             error_message=data.get("error_message"),
+            has_api=data.get("has_api", False),
+            api_info=data.get("api_info"),
         )
 
         # 递归创建子节点

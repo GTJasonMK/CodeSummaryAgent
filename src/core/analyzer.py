@@ -11,7 +11,12 @@ from src.models.file_node import FileNode
 from src.models.config import AppConfig, load_config, get_config
 from src.services.directory_scanner import DirectoryScanner
 from src.services.llm_service import LLMService, set_llm_service
-from src.services.checkpoint import CheckpointService
+from src.services.checkpoint import (
+    CheckpointService,
+    count_api_in_summary_doc,
+    count_api_in_usage_doc,
+    compare_api_counts,
+)
 from src.core.document_generator import DocumentGenerator
 from src.core.level_processor import LevelProcessor
 from src.utils.tree_printer import print_tree
@@ -157,14 +162,16 @@ class CodeAnalyzer:
             # 加载断点（如果启用）
             if resume:
                 self._notify_progress("检查已完成的分析...", 5)
-                if self._checkpoint.load_checkpoint():
-                    # 更新节点状态
-                    restored = self._checkpoint.update_node_status(self._root)
+                checkpoint_loaded = self._checkpoint.load_checkpoint()
+                if checkpoint_loaded:
+                    logger.info(f"已加载断点文件")
+
+                # 无论是否加载了checkpoint，都需要扫描已存在的文档
+                # 这样才能正确填充 _doc_path_map，用于恢复 node.doc_path
+                self._checkpoint.scan_existing_docs()
+                restored = self._checkpoint.update_node_status(self._root)
+                if restored > 0:
                     logger.info(f"从断点恢复: {restored} 个节点已完成")
-                else:
-                    # 扫描已存在的文档
-                    self._checkpoint.scan_existing_docs()
-                    self._checkpoint.update_node_status(self._root)
 
             # 创建层级处理器
             self._processor = LevelProcessor(
@@ -184,19 +191,55 @@ class CodeAnalyzer:
                 self._print_summary(success=False)
                 return False
 
-            # 生成README
-            self._notify_progress("生成README文档...", 90)
-            readme_path = await self._processor.generate_readme()
+            # 扫描已存在的最终文档（用于断点续传）
+            self._checkpoint.scan_final_docs()
 
-            if readme_path:
-                logger.info(f"README已生成: {readme_path}")
+            # 生成README（如果未完成）
+            self._notify_progress("生成README文档...", 85)
+            if self._checkpoint.is_readme_completed():
+                logger.info("README文档已存在，跳过生成")
+                readme_path = str(self.docs_path / self.config.output.readme_name)
+            else:
+                readme_path = await self._processor.generate_readme()
+                if readme_path:
+                    self._checkpoint.mark_readme_completed()
+                    logger.info(f"README已生成: {readme_path}")
 
-            # 生成阅读顺序指南
-            self._notify_progress("生成阅读顺序指南...", 95)
-            guide_path = await self._processor.generate_reading_guide()
+            # 生成阅读顺序指南（如果未完成）
+            self._notify_progress("生成阅读顺序指南...", 90)
+            if self._checkpoint.is_reading_guide_completed():
+                logger.info("阅读顺序指南已存在，跳过生成")
+                guide_path = str(self.docs_path / self.config.output.reading_guide_name)
+            else:
+                guide_path = await self._processor.generate_reading_guide()
+                if guide_path:
+                    self._checkpoint.mark_reading_guide_completed()
+                    logger.info(f"阅读指南已生成: {guide_path}")
 
-            if guide_path:
-                logger.info(f"阅读指南已生成: {guide_path}")
+            # 生成API接口文档（如果未完成）
+            self._notify_progress("生成API接口文档...", 93)
+            if self._checkpoint.is_api_doc_completed():
+                logger.info("API接口文档已存在，跳过生成")
+                api_path = str(self.docs_path / self.config.output.api_doc_name)
+            else:
+                api_path = await self._processor.generate_api_doc()
+                if api_path:
+                    self._checkpoint.mark_api_doc_completed()
+                    logger.info(f"API文档已生成: {api_path}")
+
+            # 生成API使用文档（如果未完成）
+            self._notify_progress("生成API使用文档...", 97)
+            if self._checkpoint.is_api_usage_doc_completed():
+                logger.info("API使用文档已存在，跳过生成")
+                api_usage_path = str(self.docs_path / self.config.output.api_usage_doc_name)
+            else:
+                api_usage_path = await self._processor.generate_api_usage_doc()
+                if api_usage_path:
+                    self._checkpoint.mark_api_usage_doc_completed()
+                    logger.info(f"API使用文档已生成: {api_usage_path}")
+
+            # 验证API文档接口数量一致性
+            await self._verify_api_counts(api_path, api_usage_path)
 
             self._end_time = time.time()
             self._notify_progress("分析完成", 100)
@@ -216,6 +259,62 @@ class CodeAnalyzer:
         logger.info(f"[{percentage:.0f}%] {message}")
         if self._on_progress:
             self._on_progress(message, percentage)
+
+    async def _verify_api_counts(
+        self,
+        api_doc_path: Optional[str],
+        api_usage_doc_path: Optional[str]
+    ) -> None:
+        """
+        验证两个API文档中的接口数量是否一致
+
+        通过程序化提取（而非LLM）比较两个文档中的接口数量，
+        帮助发现可能遗漏的接口。
+
+        Args:
+            api_doc_path: API接口清单文档路径
+            api_usage_doc_path: API使用文档路径
+        """
+        # 检查文件是否都存在
+        if not api_doc_path or not api_usage_doc_path:
+            logger.debug("API文档未全部生成，跳过接口数量验证")
+            return
+
+        api_doc_file = Path(api_doc_path)
+        api_usage_file = Path(api_usage_doc_path)
+
+        if not api_doc_file.exists() or not api_usage_file.exists():
+            logger.debug("API文档文件不存在，跳过接口数量验证")
+            return
+
+        try:
+            # 读取文档内容
+            with open(api_doc_file, "r", encoding="utf-8") as f:
+                api_doc_content = f.read()
+
+            with open(api_usage_file, "r", encoding="utf-8") as f:
+                api_usage_content = f.read()
+
+            # 程序化提取接口数量
+            summary_count, summary_apis = count_api_in_summary_doc(api_doc_content)
+            usage_count, usage_apis = count_api_in_usage_doc(api_usage_content)
+
+            # 比较并输出结果
+            is_consistent, report = compare_api_counts(
+                summary_count, summary_apis,
+                usage_count, usage_apis
+            )
+
+            if is_consistent:
+                logger.info(f"[接口验证] {report}")
+            else:
+                logger.warning(f"[接口验证] {report}")
+                # 输出详细接口列表供调试
+                logger.debug(f"API接口清单中的接口: {summary_apis}")
+                logger.debug(f"API使用文档中的接口: {usage_apis}")
+
+        except Exception as e:
+            logger.warning(f"接口数量验证失败: {e}")
 
     def _print_summary(self, success: bool) -> None:
         """打印分析摘要"""

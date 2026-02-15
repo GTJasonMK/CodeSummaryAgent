@@ -12,13 +12,13 @@ llm:
   model: "claude-haiku-4-5-20251001"
 
   # API密钥 (支持环境变量格式: ${OPENAI_API_KEY})
-  api_key: "sk-m8BvTxwZuQuqwsKSPaPPI7KqIa9O8xo2xeGw8dwNRg4LJ4ue"
+  api_key: "sk-LDjcFntAh48wecHMdYirMPXPR4H7QzXYXxxdEJtYViZQqKXs"
 
   # 自定义API地址 (可选，用于代理或私有部署/中转站)
   base_url: 'https://anyrouter.top'
 
   # 最大并发数
-  max_concurrent: 5
+  max_concurrent: 4
 
   # 单次调用超时(秒)
   timeout: 120
@@ -32,10 +32,12 @@ llm:
   # API格式 (可选): openai / anthropic
   # 为空则根据模型名自动检测（模型名含claude则用anthropic格式）
   # 如果中转站需要特定格式，可在此强制指定
-  # api_format: "openai"
 
   # 是否模拟浏览器请求头 (用于绕过中转站的Cloudflare检测)
   simulate_browser: true
+
+  # 是否验证SSL证书 (中转站可能需要禁用)
+  verify_ssl: false
 
   # 生成温度参数 (可选，0.0-2.0)
   # temperature: 0.7
@@ -104,6 +106,18 @@ output:
 
   # 阅读顺序指南文档名
   reading_guide_name: "READING_GUIDE.md"
+
+  # API接口文档名
+  api_doc_name: "API_DOC.md"
+
+  # 是否生成API接口文档 (适用于前后端分离项目)
+  generate_api_doc: true
+
+  # API使用文档名 (包含请求示例、响应示例的详细使用文档)
+  api_usage_doc_name: "API_USAGE.md"
+
+  # 是否生成API使用文档
+  generate_api_usage_doc: true
 
   # 目录汇总文档名 (放在每个目录下)
   dir_summary_name: "_dir_summary.md"

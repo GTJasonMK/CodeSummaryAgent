@@ -99,10 +99,13 @@ class IncrementalAnalyzer:
             with open(self.state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            # 重建状态
+            # 重建状态（统一路径分隔符，兼容旧版本状态文件）
             fingerprints = {}
             for path, fp_data in data.get("fingerprints", {}).items():
-                fingerprints[path] = FileFingerprint(**fp_data)
+                # 规范化路径分隔符
+                normalized_path = path.replace("\\", "/")
+                fp_data["path"] = normalized_path
+                fingerprints[normalized_path] = FileFingerprint(**fp_data)
 
             self.state = IncrementalState(
                 source_root=data["source_root"],
@@ -161,7 +164,8 @@ class IncrementalAnalyzer:
             文件指纹
         """
         stat = file_path.stat()
-        relative_path = str(file_path.relative_to(self.source_root))
+        # 统一使用正斜杠作为路径分隔符，确保跨平台一致性
+        relative_path = str(file_path.relative_to(self.source_root)).replace("\\", "/")
 
         # 计算内容哈希
         content_hash = self._compute_hash(file_path)
@@ -278,20 +282,24 @@ class IncrementalAnalyzer:
             if change.change_type in (ChangeType.ADDED, ChangeType.MODIFIED):
                 affected_files.add(change.path)
 
-                # 添加所有父目录
+                # 添加所有父目录（使用正斜杠分隔符）
                 path = Path(change.path)
                 for parent in path.parents:
-                    if str(parent) == ".":
+                    parent_str = str(parent)
+                    if parent_str == ".":
                         continue
-                    affected_dirs.add(str(parent))
+                    # 统一路径分隔符
+                    affected_dirs.add(parent_str.replace("\\", "/"))
 
             elif change.change_type == ChangeType.DELETED:
                 # 删除的文件，其父目录也需要更新
                 path = Path(change.path)
                 for parent in path.parents:
-                    if str(parent) == ".":
+                    parent_str = str(parent)
+                    if parent_str == ".":
                         continue
-                    affected_dirs.add(str(parent))
+                    # 统一路径分隔符
+                    affected_dirs.add(parent_str.replace("\\", "/"))
 
         # 根目录始终需要更新（如果有任何变更）
         if self.changes:
@@ -341,6 +349,9 @@ class IncrementalAnalyzer:
         Args:
             file_path: 相对文件路径
         """
+        # 统一路径分隔符
+        normalized_path = file_path.replace("\\", "/")
+
         if not self.state:
             self.state = IncrementalState(
                 source_root=str(self.source_root),
@@ -351,10 +362,10 @@ class IncrementalAnalyzer:
         if full_path.exists():
             fp = self.compute_fingerprint(full_path)
             fp.last_analyzed = datetime.now().isoformat()
-            self.state.fingerprints[file_path] = fp
+            self.state.fingerprints[normalized_path] = fp
         else:
             # 文件已删除，移除指纹
-            self.state.fingerprints.pop(file_path, None)
+            self.state.fingerprints.pop(normalized_path, None)
 
     def get_change_summary(self) -> Dict[str, int]:
         """获取变更摘要"""

@@ -174,6 +174,7 @@ class LLMQueue:
         logger.debug(f"Worker {worker_id} started")
 
         while self._running:
+            task = None
             try:
                 # 从队列获取任务（带超时）
                 try:
@@ -204,17 +205,23 @@ class LLMQueue:
 
                     # 触发回调 - 支持同步和异步回调
                     if self._on_complete:
-                        callback_result = self._on_complete(result)
-                        # 如果回调返回协程，则等待它完成
-                        if asyncio.iscoroutine(callback_result):
-                            await callback_result
-
-                self.queue.task_done()
+                        try:
+                            callback_result = self._on_complete(result)
+                            # 如果回调返回协程，则等待它完成
+                            if asyncio.iscoroutine(callback_result):
+                                await callback_result
+                        except Exception as cb_err:
+                            logger.error(f"Worker {worker_id} callback error: {cb_err}")
 
             except asyncio.CancelledError:
+                # 取消时退出循环，finally块会负责调用task_done
                 break
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}")
+            finally:
+                # 确保task_done()总是被调用（当有任务时）
+                if task is not None:
+                    self.queue.task_done()
 
         logger.debug(f"Worker {worker_id} stopped")
 
@@ -298,6 +305,9 @@ class LLMQueue:
 
         Returns:
             分析结果文本
+
+        Raises:
+            ValueError: 当LLM返回空内容时
         """
         if node.is_file:
             # 读取文件内容
@@ -305,10 +315,17 @@ class LLMQueue:
                 content = f.read()
 
             # 调用LLM分析代码
-            return await self.llm_service.analyze_code(
+            result = await self.llm_service.analyze_code(
                 file_path=node.relative_path,
                 code_content=content
             )
+
+            # 检查结果是否为空
+            if not result or not result.strip():
+                logger.error(f"LLM返回空内容: {node.relative_path}")
+                raise ValueError(f"LLM返回了空的分析内容: {node.relative_path}")
+
+            return result
         else:
             # 目录节点的分析在LevelProcessor中处理
             raise ValueError("目录节点不应该通过队列直接分析")

@@ -51,6 +51,11 @@ class LLMConfig(BaseModel):
         le=128000,
         description="最大生成token数(可选)"
     )
+    # SSL验证配置
+    verify_ssl: bool = Field(
+        default=True,
+        description="是否验证SSL证书(中转站可能需要禁用)"
+    )
 
     @field_validator("api_key", "base_url", mode="before")
     @classmethod
@@ -108,7 +113,11 @@ class OutputConfig(BaseModel):
     )
     readme_name: str = Field(default="README.md", description="最终README文档名")
     reading_guide_name: str = Field(default="READING_GUIDE.md", description="阅读顺序指南文档名")
+    api_doc_name: str = Field(default="API_DOC.md", description="API接口清单文档名")
+    api_usage_doc_name: str = Field(default="API_USAGE.md", description="API使用文档名")
     dir_summary_name: str = Field(default="_dir_summary.md", description="目录汇总文档名")
+    generate_api_doc: bool = Field(default=True, description="是否生成API接口清单文档")
+    generate_api_usage_doc: bool = Field(default=True, description="是否生成API使用文档")
 
 
 class ServerConfig(BaseModel):

@@ -127,7 +127,8 @@ class DirectoryScanner:
             return
 
         for entry in entries:
-            relative_path = str(entry.relative_to(root_path))
+            # 统一使用正斜杠作为路径分隔符，确保跨平台一致性
+            relative_path = str(entry.relative_to(root_path)).replace("\\", "/")
 
             # 检查是否应该忽略
             if self._should_ignore(entry, relative_path):

@@ -50,6 +50,38 @@ CODE_ANALYSIS_PROMPT = """请分析以下代码文件，生成详细的技术文
 4. 关键逻辑：解释核心算法或业务逻辑
 5. 使用示例：如果适用，提供简单的使用示例
 
+6. API接口识别（重要）：
+   请**仔细检查**代码，判断此文件是否包含API接口定义（HTTP端点、路由、RPC接口、WebSocket等）。
+
+   **识别API接口的特征**：
+   - Flask: @app.route, @blueprint.route, @bp.route
+   - FastAPI: @app.get, @app.post, @router.get, @router.post 等
+   - Express: app.get, app.post, router.get, router.post 等
+   - Django: path(), re_path(), urlpatterns
+   - Spring: @GetMapping, @PostMapping, @RequestMapping, @DeleteMapping, @PutMapping
+   - Gin (Go): r.GET, r.POST, router.Handle 等
+   - 其他框架的路由/端点装饰器或注册函数
+
+   **如果包含API接口**，请在文档末尾添加以下格式的标记（确保每个接口都列出，不要遗漏）：
+
+   <!-- API_START -->
+   包含API接口: 是
+   接口列表:
+   - [GET] /api/users - 获取用户列表
+   - [POST] /api/users - 创建新用户
+   - [DELETE] /api/users/{{id}} - 删除指定用户
+   <!-- API_END -->
+
+   **如果不包含API接口**，请添加：
+   <!-- API_START -->
+   包含API接口: 否
+   <!-- API_END -->
+
+   **注意**：
+   - 只列出代码中明确定义的接口，不要推测或编造
+   - 路径中的动态参数用 {{param}} 格式表示
+   - 确保不遗漏任何接口
+
 请用中文回答，保持专业和简洁。
 """
 
@@ -253,6 +285,583 @@ READING_GUIDE_PROMPT = """请根据以下项目文档，生成一份项目文档
 请用中文回答，格式清晰，使用Markdown格式。确保阅读链条是连贯的、有逻辑的。
 """
 
+# ============ 两阶段API文档生成 ============
+# 第一阶段：对每个API文件提取接口详情（中间结果）
+# 第二阶段：汇总所有中间结果生成最终API文档
+
+API_EXTRACT_PROMPT = """请从以下代码文件分析文档中**精确提取**所有API接口信息。
+
+文件路径: {file_path}
+
+文件分析文档:
+{file_doc}
+
+## 严格要求
+
+1. **只提取明确存在的接口**：只输出文档中明确提到的接口，禁止推测或编造
+2. **必须标注认证要求**：每个接口必须明确标注是否需要认证
+3. **保持信息原貌**：接口路径、方法必须与文档描述完全一致
+
+## 认证判断规则
+
+根据以下特征判断接口是否需要认证：
+- 使用了 `@require_auth`、`@require_admin`、`@login_required` 等装饰器 → 需要认证
+- 使用了 `Depends(require_api_auth)`、`Depends(get_current_user)` 等依赖 → 需要认证
+- 路由定义中明确提到 "无需认证"、"公开接口" → 无需认证
+- 登录接口（如 `/login`）本身 → 无需认证
+- 健康检查、静态资源接口 → 通常无需认证
+- 如果文档未明确说明，标注为"未明确"
+
+## 输出格式（严格按此格式）
+
+如果文件包含API接口，按以下格式输出：
+
+### {file_path} 的接口列表
+
+| 序号 | 方法 | 路径 | 功能描述 | 认证要求 |
+|------|------|------|----------|----------|
+| 1 | GET/POST/... | /api/xxx | 简要描述 | 需要/无需/未明确 |
+
+如果文件中没有API接口，只输出一行：
+**该文件未定义API接口**
+
+## 禁止事项
+- 禁止编造文档中未提及的接口
+- 禁止生成请求/响应示例
+- 禁止遗漏认证要求信息
+"""
+
+# 第二阶段：汇总提示词（固定模板格式）
+API_SUMMARY_PROMPT = """请根据以下各文件提取的API接口信息，生成一份**精确、完整**的接口清单。
+
+项目名称: {project_name}
+
+各文件的接口信息:
+{api_details}
+
+## 严格要求
+
+1. **不重不漏**：确保每个接口只出现一次，同时不遗漏任何接口
+2. **禁止幻觉**：只输出上述信息中明确存在的接口，禁止编造
+3. **保持原貌**：接口路径、方法、认证要求必须与原文完全一致
+4. **固定格式**：严格按照下方模板输出，不要改变格式结构
+
+## 输出模板（严格按此格式，不要修改结构）
+
+```markdown
+## 一、接口总览
+
+| 序号 | 模块 | 方法 | 路径 | 功能描述 | 认证 |
+|------|------|------|------|----------|------|
+| 1 | 模块名 | GET | /xxx | 描述 | 是/否 |
+| 2 | ... | ... | ... | ... | ... |
+
+## 二、按模块分类
+
+按以下固定顺序组织模块（如果该模块无接口则跳过）：
+
+### 2.1 核心业务接口
+（聊天、对话、主要业务功能相关的接口）
+
+| 方法 | 路径 | 功能描述 | 认证 |
+|------|------|----------|------|
+
+### 2.2 资源管理接口
+（文件、图片、模型等资源相关的接口）
+
+| 方法 | 路径 | 功能描述 | 认证 |
+|------|------|----------|------|
+
+### 2.3 用户与认证接口
+（登录、注册、Token管理等认证相关的接口）
+
+| 方法 | 路径 | 功能描述 | 认证 |
+|------|------|----------|------|
+
+### 2.4 系统管理接口
+（账号管理、配置管理、系统维护等管理接口）
+
+| 方法 | 路径 | 功能描述 | 认证 |
+|------|------|----------|------|
+
+### 2.5 辅助接口
+（健康检查、页面路由、静态资源等辅助接口）
+
+| 方法 | 路径 | 功能描述 | 认证 |
+|------|------|----------|------|
+
+## 三、认证要求汇总
+
+### 无需认证的接口
+- `GET /xxx` - 描述
+- `POST /xxx` - 描述
+
+### 需要认证的接口
+- 核心业务接口：全部需要认证
+- 资源管理接口：除 xxx 外全部需要认证
+- ...（按模块说明）
+```
+
+## 禁止事项
+- 禁止编造不存在的接口
+- 禁止生成请求/响应示例
+- 禁止改变上述模板的结构
+- 禁止添加模板中没有的章节
+"""
+
+# 最终文档（README、阅读指南、API文档）使用更大的max_tokens，避免截断
+FINAL_DOC_MAX_TOKENS = 16384
+
+# 代码分析的最小max_tokens，确保大型文件的API信息不被截断
+# 文件分析文档可能很长（包含概述、组件、依赖、逻辑、示例、API接口列表等）
+# 4096 tokens 对于大型文件（如api_server.py）明显不足
+CODE_ANALYSIS_MIN_TOKENS = 8192
+
+API_DOC_PROMPT = """请根据以下项目文档，生成一份完整的API接口文档。
+
+项目名称: {project_name}
+
+项目结构:
+{project_structure}
+
+所有模块文档:
+{all_documents}
+
+请分析代码，识别所有的API接口（HTTP端点、RPC接口、WebSocket等），生成详细的接口文档。
+
+## 必须包含的内容
+
+### 1. 接口概览
+用表格列出所有接口：接口名称、方法、路径、描述
+
+### 2. 认证说明
+说明API的认证方式：认证类型、Token传递方式、Token格式
+
+### 3. 接口详情
+对每个接口提供：
+- 路径和方法
+- 接口描述
+- 是否需要认证
+- 请求参数表格（参数名、位置、类型、必填、描述）
+- 请求体示例（使用JSON格式）
+- 成功响应示例（使用JSON格式）
+- 错误响应示例（使用JSON格式）
+
+### 4. 数据模型
+定义接口中使用的数据结构，用表格列出字段名、类型、描述
+
+### 5. 错误码说明
+用表格列出常见错误码：错误码、说明、处理建议
+
+### 6. 接口调用示例
+提供curl命令示例
+
+### 7. 前后端对接检查清单
+列出对接时需要检查的要点
+
+## 注意事项
+- 如果无法从代码中识别出API接口，请明确说明"未检测到API接口"
+- 对于无法确定的信息，用"待确认"标记
+- 参数类型要准确（string/number/boolean/object/array）
+
+请用中文回答，格式清晰，使用Markdown格式。
+"""
+
+# ============ API使用文档生成（两阶段） ============
+# 第一阶段：对每个API文件提取详细的使用信息
+# 第二阶段：汇总生成完整的API使用文档
+
+API_USAGE_EXTRACT_PROMPT = """请从以下代码文件分析文档中**提取详细的API使用信息**。
+
+文件路径: {file_path}
+
+文件分析文档:
+{file_doc}
+
+## 任务说明
+
+你需要为每个API接口提取完整的使用信息，包括请求参数、请求示例、响应示例等。
+这些信息将用于生成面向开发者的API使用文档。
+
+## 提取要求
+
+对于文档中提到的**每一个API接口**，请提取以下信息：
+
+1. **基本信息**：方法、路径、功能描述、是否需要认证
+2. **请求参数**：
+   - 路径参数（如 /users/{{id}} 中的 id）
+   - 查询参数（如 ?page=1&size=10）
+   - 请求体参数（JSON字段）
+3. **请求示例**：完整的JSON请求体示例
+4. **响应格式**：成功响应的JSON结构
+5. **错误响应**：常见错误的响应格式
+
+## 输出格式（严格按此格式）
+
+### {file_path} 的API使用详情
+
+#### 接口1: [方法] [路径]
+
+**功能描述**：简要描述接口作用
+
+**认证要求**：需要/无需
+
+**请求参数**：
+
+| 参数名 | 位置 | 类型 | 必填 | 描述 |
+|--------|------|------|------|------|
+| xxx | path/query/body | string/number/... | 是/否 | 描述 |
+
+**请求示例**：
+```json
+{{
+  "field": "value"
+}}
+```
+
+**成功响应**：
+```json
+{{
+  "code": 0,
+  "data": {{}}
+}}
+```
+
+**错误响应**：
+```json
+{{
+  "code": 400,
+  "message": "错误描述"
+}}
+```
+
+---
+
+（重复以上格式，直到所有接口都提取完毕）
+
+## 注意事项
+- 如果文档中信息不完整，根据常见RESTful API规范合理推断
+- 请求/响应示例要符合JSON格式规范
+- 如果文件中没有API接口，只输出：**该文件未定义API接口**
+"""
+
+API_USAGE_SUMMARY_PROMPT = """请根据以下各文件提取的API使用详情，生成一份**完整的API使用文档**。
+
+项目名称: {project_name}
+
+## 必须覆盖的接口清单（严格要求）
+
+以下是API接口清单文档中已确认的所有接口，**你必须为每一个接口生成使用文档，不得遗漏任何一个**：
+
+{api_reference_list}
+
+## 各文件的API使用详情
+
+{api_usage_details}
+
+## 核心要求（必须遵守）
+
+1. **完整覆盖**：必须为上述"必须覆盖的接口清单"中的每一个接口生成详细的使用说明
+2. **路径一致**：接口路径必须与清单中的路径**完全一致**，不要添加或删除路径前缀
+3. **不可遗漏**：如果某个接口在使用详情中没有信息，也要根据接口名称生成基础的使用说明
+
+## 任务说明
+
+生成一份面向开发者的API使用文档，帮助开发者快速上手调用这些API接口。
+
+## 输出格式（严格按此模板）
+
+```markdown
+# {project_name} API使用文档
+
+## 一、快速开始
+
+### 1.1 Base URL
+说明API的基础地址（如果能推断的话）
+
+### 1.2 认证方式
+说明如何进行API认证：
+- Token类型（Bearer Token / API Key / 其他）
+- Token传递方式（Header / Query / Cookie）
+- 获取Token的方式
+
+### 1.3 通用请求头
+```
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+### 1.4 通用响应格式
+说明响应的通用结构
+
+## 二、接口详情
+
+按以下分类组织接口（无接口的分类跳过）：
+
+### 2.1 核心业务接口
+
+#### POST /v1/chat/completions
+**功能**：描述
+**认证**：需要
+
+**请求参数**：
+| 参数名 | 位置 | 类型 | 必填 | 描述 |
+|--------|------|------|------|------|
+
+**请求示例**：
+```bash
+curl -X POST "https://api.example.com/v1/chat/completions" \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{{
+    "model": "gpt-4",
+    "messages": [{{"role": "user", "content": "Hello"}}]
+  }}'
+```
+
+**响应示例**：
+```json
+{{
+  "id": "xxx",
+  "choices": [...]
+}}
+```
+
+---
+
+### 2.2 资源管理接口
+（文件、图片、模型等）
+
+### 2.3 用户与认证接口
+（登录、注册、Token管理等）
+
+### 2.4 系统管理接口
+（账号管理、配置管理等）
+
+### 2.5 辅助接口
+（健康检查、页面路由等）
+
+## 三、错误处理
+
+### 3.1 HTTP状态码
+| 状态码 | 说明 |
+|--------|------|
+| 200 | 成功 |
+| 400 | 请求参数错误 |
+| 401 | 未认证 |
+| 403 | 无权限 |
+| 404 | 资源不存在 |
+| 500 | 服务器内部错误 |
+
+### 3.2 错误响应格式
+```json
+{{
+  "error": {{
+    "code": "ERROR_CODE",
+    "message": "错误描述"
+  }}
+}}
+```
+
+## 四、调用示例
+
+### 4.1 使用curl
+提供几个典型的curl调用示例
+
+### 4.2 使用Python
+```python
+import requests
+
+response = requests.post(
+    "https://api.example.com/v1/chat/completions",
+    headers={{"Authorization": "Bearer <token>"}},
+    json={{"model": "gpt-4", "messages": [...]}}
+)
+```
+
+### 4.3 使用JavaScript
+```javascript
+const response = await fetch('/v1/chat/completions', {{
+  method: 'POST',
+  headers: {{
+    'Authorization': 'Bearer <token>',
+    'Content-Type': 'application/json'
+  }},
+  body: JSON.stringify({{...}})
+}});
+```
+```
+
+## 禁止事项
+- 禁止编造不存在的接口
+- 禁止改变上述模板的结构
+- 禁止遗漏"必须覆盖的接口清单"中的任何接口
+- 禁止修改接口路径（必须与清单一致）
+- 如果信息不足，标注"待补充"而非编造
+"""
+
+# ============ 分批生成API使用文档（解决接口过多导致截断问题） ============
+# 当接口数量超过阈值时，按模块分批生成，最后合并
+
+# 分批生成阈值：超过此数量的接口将采用分批生成策略
+API_USAGE_BATCH_THRESHOLD = 20
+
+# 单个模块的接口使用文档生成
+API_USAGE_MODULE_PROMPT = """请为以下模块的API接口生成详细的使用文档。
+
+项目名称: {project_name}
+模块名称: {module_name}
+
+## 本模块必须覆盖的接口
+
+{module_api_list}
+
+## 相关的API使用详情
+
+{api_usage_details}
+
+## 核心要求
+
+1. **完整覆盖**：必须为上述列表中的每一个接口生成详细的使用说明
+2. **路径一致**：接口路径必须与列表中的路径**完全一致**
+3. **不可遗漏**：即使详情中信息不足，也要生成基础的使用说明
+
+## 输出格式
+
+对于每个接口，按以下格式输出：
+
+#### [METHOD] [PATH]
+**功能**：简要描述
+**认证**：需要/无需
+
+**请求参数**：
+| 参数名 | 位置 | 类型 | 必填 | 描述 |
+|--------|------|------|------|------|
+| xxx | path/query/body | string | 是/否 | 描述 |
+
+**请求示例**：
+```bash
+curl -X METHOD "https://api.example.com/path" \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{{...}}'
+```
+
+**响应示例**：
+```json
+{{
+  "code": 0,
+  "data": {{...}}
+}}
+```
+
+---
+
+## 注意事项
+- 只输出接口详情部分，不要输出文档标题、快速开始、错误处理等通用部分
+- 每个接口之间用 `---` 分隔
+- 如果信息不足，标注"待补充"
+"""
+
+# 通用部分生成（快速开始、错误处理、调用示例）
+API_USAGE_COMMON_PROMPT = """请为项目生成API使用文档的通用部分。
+
+项目名称: {project_name}
+
+## 项目API概况
+
+{api_overview}
+
+## 相关的API使用详情（用于推断认证方式等）
+
+{api_usage_details}
+
+## 任务说明
+
+生成API使用文档的通用部分，包括：
+1. 快速开始（Base URL、认证方式、通用请求头、通用响应格式）
+2. 错误处理（HTTP状态码、错误响应格式）
+3. 调用示例（curl、Python、JavaScript）
+
+## 输出格式
+
+```markdown
+## 一、快速开始
+
+### 1.1 Base URL
+说明API的基础地址
+
+### 1.2 认证方式
+说明如何进行API认证：
+- Token类型（Bearer Token / API Key / 其他）
+- Token传递方式（Header / Query / Cookie）
+- 获取Token的方式
+
+### 1.3 通用请求头
+```
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+### 1.4 通用响应格式
+说明响应的通用结构
+
+## 三、错误处理
+
+### 3.1 HTTP状态码
+| 状态码 | 说明 |
+|--------|------|
+| 200 | 成功 |
+| 400 | 请求参数错误 |
+| 401 | 未认证 |
+| 403 | 无权限 |
+| 404 | 资源不存在 |
+| 500 | 服务器内部错误 |
+
+### 3.2 错误响应格式
+```json
+{{
+  "error": {{
+    "code": "ERROR_CODE",
+    "message": "错误描述"
+  }}
+}}
+```
+
+## 四、调用示例
+
+### 4.1 使用curl
+提供几个典型的curl调用示例
+
+### 4.2 使用Python
+```python
+import requests
+
+response = requests.post(
+    "https://api.example.com/endpoint",
+    headers={{"Authorization": "Bearer <token>"}},
+    json={{...}}
+)
+```
+
+### 4.3 使用JavaScript
+```javascript
+const response = await fetch('/endpoint', {{
+  method: 'POST',
+  headers: {{
+    'Authorization': 'Bearer <token>',
+    'Content-Type': 'application/json'
+  }},
+  body: JSON.stringify({{...}})
+}});
+```
+```
+
+## 注意事项
+- 只输出通用部分，不要输出接口详情
+- 根据提供的API概况和详情推断认证方式等信息
+"""
+
 
 class ContentCollectMode(Enum):
     """流式响应收集模式"""
@@ -300,6 +909,7 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         simulate_browser: bool = True,
+        verify_ssl: bool = True,
     ):
         """
         初始化LLM客户端
@@ -308,6 +918,7 @@ class LLMClient:
             api_key: API密钥
             base_url: API基础URL（中转站地址）
             simulate_browser: 是否模拟浏览器请求头
+            verify_ssl: 是否验证SSL证书
         """
         # 解析API密钥
         key = self._resolve_env_var(api_key) or os.environ.get("OPENAI_API_KEY")
@@ -321,6 +932,7 @@ class LLMClient:
         self._api_key = key
         self._base_url = url
         self._simulate_browser = simulate_browser
+        self._verify_ssl = verify_ssl
 
         # 构建浏览器模拟请求头
         default_headers = {}
@@ -345,7 +957,7 @@ class LLMClient:
         )
 
         logger.info(
-            f"LLM客户端初始化: base_url={url or '官方API'}, simulate_browser={simulate_browser}"
+            f"LLM客户端初始化: base_url={url or '官方API'}, simulate_browser={simulate_browser}, verify_ssl={verify_ssl}"
         )
 
     def _resolve_env_var(self, value: Optional[str]) -> Optional[str]:
@@ -401,7 +1013,7 @@ class LLMClient:
             "model": model,
             "messages": anthropic_messages,
             "stream": True,
-            "max_tokens": max_tokens or 4096,
+            "max_tokens": max_tokens or 8192,  # 默认8192，避免大型文件分析被截断
         }
 
         if system_content:
@@ -412,7 +1024,7 @@ class LLMClient:
         logger.info(f"Anthropic API请求: endpoint={endpoint}, model={model}")
 
         try:
-            async with httpx.AsyncClient(timeout=float(timeout)) as client:
+            async with httpx.AsyncClient(timeout=float(timeout), verify=self._verify_ssl) as client:
                 async with client.stream(
                     "POST",
                     endpoint,
@@ -464,12 +1076,16 @@ class LLMClient:
                         except json.JSONDecodeError:
                             continue
 
-        except httpx.TimeoutException:
-            logger.error(f"Anthropic API超时: model={model}, timeout={timeout}")
+        except httpx.TimeoutException as e:
+            logger.error(f"Anthropic API超时: model={model}, timeout={timeout}, error={type(e).__name__}")
+            raise
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Anthropic API HTTP错误: model={model}, status={e.response.status_code}, response={e.response.text[:500]}")
             raise
         except Exception as e:
-            if "Anthropic API错误" not in str(e):
-                logger.error(f"Anthropic API失败: model={model}, error={e}")
+            error_detail = str(e) or repr(e) or type(e).__name__
+            if "Anthropic API错误" not in error_detail:
+                logger.error(f"Anthropic API失败: model={model}, type={type(e).__name__}, error={error_detail}")
             raise
 
     async def _stream_chat_openai(
@@ -670,6 +1286,7 @@ class LLMService:
             api_key=self.config.api_key,
             base_url=self.config.base_url,
             simulate_browser=self.config.simulate_browser,
+            verify_ssl=self.config.verify_ssl,
         )
 
         # 保存配置
@@ -686,11 +1303,18 @@ class LLMService:
             code_content=code_content
         )
 
+        # 使用配置的max_tokens，但确保不低于CODE_ANALYSIS_MIN_TOKENS
+        # 这是为了防止大型文件（如api_server.py）的API信息因token限制被截断
+        effective_max_tokens = max(
+            self.max_tokens or CODE_ANALYSIS_MIN_TOKENS,
+            CODE_ANALYSIS_MIN_TOKENS
+        )
+
         return await self.client.complete(
             prompt=prompt,
             model=self.model,
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            max_tokens=effective_max_tokens,
             timeout=self.timeout,
             api_format=self.api_format,
         )
@@ -730,11 +1354,14 @@ class LLMService:
             all_documents=all_documents
         )
 
+        # 最终文档使用更大的max_tokens避免截断
+        final_max_tokens = self.max_tokens or FINAL_DOC_MAX_TOKENS
+
         return await self.client.complete(
             prompt=prompt,
             model=self.model,
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            max_tokens=final_max_tokens,
             timeout=self.timeout,
             api_format=self.api_format,
         )
@@ -752,11 +1379,246 @@ class LLMService:
             all_documents=all_documents
         )
 
+        # 最终文档使用更大的max_tokens避免截断
+        final_max_tokens = self.max_tokens or FINAL_DOC_MAX_TOKENS
+
         return await self.client.complete(
             prompt=prompt,
             model=self.model,
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            max_tokens=final_max_tokens,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    async def generate_api_doc(
+        self,
+        project_name: str,
+        project_structure: str,
+        all_documents: str
+    ) -> str:
+        """生成API接口文档（旧方法，保留兼容性）"""
+        prompt = API_DOC_PROMPT.format(
+            project_name=project_name,
+            project_structure=project_structure,
+            all_documents=all_documents
+        )
+
+        # 最终文档使用更大的max_tokens避免截断
+        final_max_tokens = self.max_tokens or FINAL_DOC_MAX_TOKENS
+
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=final_max_tokens,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    async def extract_api_details(
+        self,
+        file_path: str,
+        file_doc: str
+    ) -> str:
+        """
+        第一阶段：从单个文件提取API接口详情
+
+        Args:
+            file_path: 文件路径
+            file_doc: 文件的分析文档内容
+
+        Returns:
+            提取的接口详情（结构化文本）
+        """
+        prompt = API_EXTRACT_PROMPT.format(
+            file_path=file_path,
+            file_doc=file_doc
+        )
+
+        # 单文件提取使用较大的max_tokens，避免大型API文件被截断
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens or FINAL_DOC_MAX_TOKENS,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    async def summarize_api_docs(
+        self,
+        project_name: str,
+        api_details: str
+    ) -> str:
+        """
+        第二阶段：汇总所有接口详情生成最终API文档
+
+        Args:
+            project_name: 项目名称
+            api_details: 所有文件的接口详情汇总
+
+        Returns:
+            最终的API接口文档
+        """
+        prompt = API_SUMMARY_PROMPT.format(
+            project_name=project_name,
+            api_details=api_details
+        )
+
+        # 最终文档使用更大的max_tokens避免截断
+        final_max_tokens = self.max_tokens or FINAL_DOC_MAX_TOKENS
+
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=final_max_tokens,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    # ============ API使用文档生成方法 ============
+
+    async def extract_api_usage_details(
+        self,
+        file_path: str,
+        file_doc: str
+    ) -> str:
+        """
+        第一阶段：从单个文件提取API使用详情
+
+        Args:
+            file_path: 文件路径
+            file_doc: 文件的分析文档内容
+
+        Returns:
+            提取的API使用详情（包含请求示例、响应示例等）
+        """
+        prompt = API_USAGE_EXTRACT_PROMPT.format(
+            file_path=file_path,
+            file_doc=file_doc
+        )
+
+        # 使用较大的max_tokens，因为需要生成详细的示例
+        # 大型API文件（如agentserver/agent_server.py含27个接口）需要更多tokens
+        # 每个接口详情约需400-600 tokens，使用FINAL_DOC_MAX_TOKENS更安全
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens or FINAL_DOC_MAX_TOKENS,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    async def summarize_api_usage_docs(
+        self,
+        project_name: str,
+        api_usage_details: str,
+        api_reference_list: str = ""
+    ) -> str:
+        """
+        第二阶段：汇总所有API使用详情生成最终使用文档
+
+        Args:
+            project_name: 项目名称
+            api_usage_details: 所有文件的API使用详情汇总
+            api_reference_list: API接口清单中的接口列表（用于确保完整覆盖）
+
+        Returns:
+            最终的API使用文档
+        """
+        # 如果没有提供接口清单，使用默认提示
+        if not api_reference_list:
+            api_reference_list = "（未提供接口清单，请根据使用详情生成文档）"
+
+        prompt = API_USAGE_SUMMARY_PROMPT.format(
+            project_name=project_name,
+            api_usage_details=api_usage_details,
+            api_reference_list=api_reference_list
+        )
+
+        # 最终文档使用更大的max_tokens避免截断
+        final_max_tokens = self.max_tokens or FINAL_DOC_MAX_TOKENS
+
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=final_max_tokens,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    # ============ 分批生成API使用文档的方法 ============
+
+    async def generate_api_usage_module(
+        self,
+        project_name: str,
+        module_name: str,
+        module_api_list: str,
+        api_usage_details: str
+    ) -> str:
+        """
+        生成单个模块的API使用文档
+
+        Args:
+            project_name: 项目名称
+            module_name: 模块名称（如"核心业务接口"）
+            module_api_list: 该模块的接口列表
+            api_usage_details: 相关的API使用详情
+
+        Returns:
+            该模块的接口使用文档
+        """
+        prompt = API_USAGE_MODULE_PROMPT.format(
+            project_name=project_name,
+            module_name=module_name,
+            module_api_list=module_api_list,
+            api_usage_details=api_usage_details
+        )
+
+        # 单个模块也使用较大的max_tokens，避免接口较多时被截断
+        # 每个接口的详细描述（功能、认证、参数表、请求示例、响应示例）约需400-600 tokens
+        # 10个接口的模块可能需要6000+ tokens，使用FINAL_DOC_MAX_TOKENS更安全
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens or FINAL_DOC_MAX_TOKENS,
+            timeout=self.timeout,
+            api_format=self.api_format,
+        )
+
+    async def generate_api_usage_common(
+        self,
+        project_name: str,
+        api_overview: str,
+        api_usage_details: str
+    ) -> str:
+        """
+        生成API使用文档的通用部分
+
+        Args:
+            project_name: 项目名称
+            api_overview: API概况（接口数量、模块分布等）
+            api_usage_details: 部分API使用详情（用于推断认证方式等）
+
+        Returns:
+            通用部分的文档内容
+        """
+        prompt = API_USAGE_COMMON_PROMPT.format(
+            project_name=project_name,
+            api_overview=api_overview,
+            api_usage_details=api_usage_details
+        )
+
+        return await self.client.complete(
+            prompt=prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens or 4096,
             timeout=self.timeout,
             api_format=self.api_format,
         )

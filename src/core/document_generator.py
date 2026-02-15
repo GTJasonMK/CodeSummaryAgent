@@ -225,6 +225,56 @@ class DocumentGenerator:
 
         return doc_path
 
+    async def save_api_doc(
+        self,
+        project_name: str,
+        content: str,
+    ) -> str:
+        """
+        保存API接口清单文档
+
+        Args:
+            project_name: 项目名称
+            content: API文档内容
+
+        Returns:
+            保存的文档路径
+        """
+        doc_path = str(self.docs_root / self.config.api_doc_name)
+
+        # 添加生成信息
+        formatted_content = self._format_api_doc(project_name, content)
+
+        await self._save_document(doc_path, formatted_content)
+        logger.info(f"已保存API接口清单: {doc_path}")
+
+        return doc_path
+
+    async def save_api_usage_doc(
+        self,
+        project_name: str,
+        content: str,
+    ) -> str:
+        """
+        保存API使用文档
+
+        Args:
+            project_name: 项目名称
+            content: API使用文档内容
+
+        Returns:
+            保存的文档路径
+        """
+        doc_path = str(self.docs_root / self.config.api_usage_doc_name)
+
+        # 添加生成信息
+        formatted_content = self._format_api_usage_doc(project_name, content)
+
+        await self._save_document(doc_path, formatted_content)
+        logger.info(f"已保存API使用文档: {doc_path}")
+
+        return doc_path
+
     async def read_document(self, doc_path: str) -> str:
         """
         读取文档内容
@@ -259,6 +309,36 @@ class DocumentGenerator:
                 except Exception as e:
                     logger.warning(f"读取子节点文档失败: {child.doc_path}, {e}")
 
+        return "\n\n---\n\n".join(summaries)
+
+    async def read_all_file_docs(self, node: FileNode) -> str:
+        """
+        递归读取所有文件级别的文档（不包含目录汇总）
+
+        用于API文档生成，需要获取每个源文件的详细分析，
+        而不是目录汇总（目录汇总可能会丢失接口细节）。
+
+        Args:
+            node: 根节点
+
+        Returns:
+            合并后的所有文件文档
+        """
+        summaries = []
+
+        # 获取所有文件节点
+        all_files = node.get_all_files()
+
+        for file_node in all_files:
+            if file_node.doc_path:
+                try:
+                    content = await self.read_document(file_node.doc_path)
+                    # 使用相对路径作为标题，更清晰
+                    summaries.append(f"### {file_node.relative_path}\n\n{content}")
+                except Exception as e:
+                    logger.warning(f"读取文件文档失败: {file_node.doc_path}, {e}")
+
+        logger.info(f"已读取 {len(summaries)} 个文件文档用于API分析")
         return "\n\n---\n\n".join(summaries)
 
     async def _save_document(self, doc_path: str, content: str) -> None:
@@ -330,6 +410,36 @@ class DocumentGenerator:
 *生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}*
 """
         return header + content + footer
+
+    def _format_api_doc(self, project_name: str, content: str) -> str:
+        """格式化API接口文档"""
+        header = f"""# {project_name} - API接口清单
+
+> 本文档列出项目的所有API接口及其功能描述。
+> 注意：本文档仅包含接口清单，不包含详细的请求/响应示例。
+
+---
+
+"""
+        footer = f"""
+
+---
+
+*本文档由 CodeSummaryAgent 自动生成*
+*生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}*
+"""
+        return header + content + footer
+
+    def _format_api_usage_doc(self, project_name: str, content: str) -> str:
+        """格式化API使用文档"""
+        footer = f"""
+
+---
+
+*本文档由 CodeSummaryAgent 自动生成*
+*生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}*
+"""
+        return content + footer
 
 
 def get_display_name(node: FileNode) -> str:
